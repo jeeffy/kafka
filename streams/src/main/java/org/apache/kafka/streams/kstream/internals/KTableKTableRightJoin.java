@@ -1,10 +1,10 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
  * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * the License. You may obtain a copy of the License at
  *
  *    http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -14,7 +14,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.kafka.streams.kstream.internals;
 
 import org.apache.kafka.streams.kstream.ValueJoiner;
@@ -22,10 +21,10 @@ import org.apache.kafka.streams.processor.AbstractProcessor;
 import org.apache.kafka.streams.processor.Processor;
 import org.apache.kafka.streams.processor.ProcessorContext;
 
-class KTableKTableRightJoin<K, V, V1, V2> extends KTableKTableAbstractJoin<K, V, V1, V2> {
+class KTableKTableRightJoin<K, R, V1, V2> extends KTableKTableAbstractJoin<K, R, V1, V2> {
 
 
-    KTableKTableRightJoin(KTableImpl<K, ?, V1> table1, KTableImpl<K, ?, V2> table2, ValueJoiner<V1, V2, V> joiner) {
+    KTableKTableRightJoin(KTableImpl<K, ?, V1> table1, KTableImpl<K, ?, V2> table2, ValueJoiner<? super V1, ? super V2, ? extends R> joiner) {
         super(table1, table2, joiner);
     }
 
@@ -35,14 +34,19 @@ class KTableKTableRightJoin<K, V, V1, V2> extends KTableKTableAbstractJoin<K, V,
     }
 
     @Override
-    public KTableValueGetterSupplier<K, V> view() {
-        return new KTableValueGetterSupplier<K, V>() {
+    public KTableValueGetterSupplier<K, R> view() {
+        return new KTableKTableRightJoinValueGetterSupplier(valueGetterSupplier1, valueGetterSupplier2);
+    }
 
-            public KTableValueGetter<K, V> get() {
-                return new KTableKTableRightJoinValueGetter(valueGetterSupplier1.get(), valueGetterSupplier2.get());
-            }
+    private class KTableKTableRightJoinValueGetterSupplier extends AbstractKTableKTableJoinValueGetterSupplier<K, R, V1, V2> {
 
-        };
+        public KTableKTableRightJoinValueGetterSupplier(KTableValueGetterSupplier<K, V1> valueGetterSupplier1, KTableValueGetterSupplier<K, V2> valueGetterSupplier2) {
+            super(valueGetterSupplier1, valueGetterSupplier2);
+        }
+
+        public KTableValueGetter<K, R> get() {
+            return new KTableKTableRightJoinValueGetter(valueGetterSupplier1.get(), valueGetterSupplier2.get());
+        }
     }
 
     private class KTableKTableRightJoinProcessor extends AbstractProcessor<K, Change<V1>> {
@@ -61,15 +65,24 @@ class KTableKTableRightJoin<K, V, V1, V2> extends KTableKTableAbstractJoin<K, V,
         }
 
         @Override
-        public void process(K key, Change<V1> change) {
-            V newValue = null;
-            V oldValue = null;
-            V2 value2 = valueGetter.get(key);
+        public void process(final K key, final Change<V1> change) {
+            // we do join iff keys are equal, thus, if key is null we cannot join and just ignore the record
+            if (key == null) {
+                return;
+            }
 
-            if (value2 != null) {
-                newValue = joiner.apply(change.newValue, value2);
-                if (sendOldValues)
-                    oldValue = joiner.apply(change.oldValue, value2);
+            final R newValue;
+            R oldValue = null;
+
+            final V2 value2 = valueGetter.get(key);
+            if (value2 == null) {
+                return;
+            }
+
+            newValue = joiner.apply(change.newValue, value2);
+
+            if (sendOldValues) {
+                oldValue = joiner.apply(change.oldValue, value2);
             }
 
             context().forward(key, new Change<>(newValue, oldValue));
@@ -77,7 +90,7 @@ class KTableKTableRightJoin<K, V, V1, V2> extends KTableKTableAbstractJoin<K, V,
 
     }
 
-    private class KTableKTableRightJoinValueGetter implements KTableValueGetter<K, V> {
+    private class KTableKTableRightJoinValueGetter implements KTableValueGetter<K, R> {
 
         private final KTableValueGetter<K, V1> valueGetter1;
         private final KTableValueGetter<K, V2> valueGetter2;
@@ -94,7 +107,7 @@ class KTableKTableRightJoin<K, V, V1, V2> extends KTableKTableAbstractJoin<K, V,
         }
 
         @Override
-        public V get(K key) {
+        public R get(K key) {
             V2 value2 = valueGetter2.get(key);
 
             if (value2 != null) {
